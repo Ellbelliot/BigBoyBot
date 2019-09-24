@@ -125,7 +125,7 @@ class BigBoyBot(BaseAgent):
                    car_to_closest_location = car_to_location
 
 
-        if goal_car_distance > other_goal_to_ball_distance:
+        if goal_ball_distance > other_goal_to_ball_distance or car_ball_distance < other_car_ball_distance * 1.5:
             offset = Vec3(-other_goal_to_ball[0] / abs(other_goal_to_car[0] + 0.1), -other_goal_to_ball[1] /
                           abs(other_goal_to_car[1] + 0.1), -other_goal_to_ball[2] / abs(other_goal_to_car[2] + 0.1)) * \
             (50 + (car_speed / 10000) * 50)
@@ -169,7 +169,7 @@ class BigBoyBot(BaseAgent):
 
         if goal_car_distance < goal_ball_distance < other_car_ball_distance * 2 and is_going_in:
             self.mode = "defending"
-        elif time_to_hit > other_time_to_hit + 0.2:
+        elif time_to_hit > other_time_to_hit + 0.2 or goal_ball_distance < car_ball_distance:
             self.mode = "shadowing"
         elif abs(steer_correction_radians_to_boost) < math.pi / (2 * (1 + (my_car.boost / 5))) and \
                 distance_to_boost < other_car_ball_distance and distance_to_boost < car_ball_distance:
