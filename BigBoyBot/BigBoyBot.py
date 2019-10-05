@@ -106,23 +106,30 @@ class BigBoyBot(BaseAgent):
         closest_location = ball_location
         car_to_closest_location = closest_location - car_location
 
-        if ball_predictions is not None:
-            for i in range(0, ball_predictions.num_slices):
-                prediction_slice = ball_predictions.slices[i]
-                location = prediction_slice.physics.location
-                if 0 < (prediction_slice.game_seconds - packet.game_info.seconds_elapsed) - \
-                        (abs((Vec3(location)[0] - car_location[0]) / (1 + car_velocity[0])) + \
-                        abs((Vec3(location)[1] - car_location[1]) / (1 + car_velocity[1]))) / 50 < 0.1:
-                    ball_prediction = Vec3(location)
-                    correct_slice = prediction_slice
-                goal_to_location = Vec3(my_goal.location) - Vec3(location)
-                car_to_location = Vec3(location) - car_location
-                if abs(goal_to_location[0]) + abs(goal_to_location[1]) + abs(goal_to_location[2]) < 1500:
-                    is_going_in = True
-                if abs(car_to_location[0]) + abs(car_to_location[1]) < abs(car_to_closest_location[0]) + \
-                                                                            abs(car_to_closest_location[1]):
-                   closest_location = Vec3(location)
-                   car_to_closest_location = car_to_location
+        prediction_time = 0
+
+        best_score = 0
+        for i in range(ball_predictions.num_slices):
+            pos = Vec3(ball_predictions.slices[i].physics.location)
+            time = ball_predictions.slices[i].game_seconds
+            if best_score < get_score(time - packet.game_info.seconds_elapsed,
+                    find_eta(car_location, pos, car_velocity, steer_correction_radians_to_ball),
+                    find_eta(other_car_location, pos, other_car_velocity, steer_correction_radians_to_ball), pos) and \
+                    find_eta(car_location, pos, car_velocity, steer_correction_radians_to_ball) < time - \
+                    packet.game_info.seconds_elapsed:
+                best_score = get_score(time - packet.game_info.seconds_elapsed,
+                    find_eta(car_location, pos, car_velocity, steer_correction_radians_to_ball),
+                    find_eta(other_car_location, pos, other_car_velocity, steer_correction_radians_to_ball), pos)
+                ball_prediction = pos
+                prediction_time = time
+            goal_to_location = Vec3(my_goal.location) - Vec3(pos)
+            car_to_location = Vec3(pos) - car_location
+            if abs(goal_to_location[0]) + abs(goal_to_location[1]) + abs(goal_to_location[2]) < 1500:
+                is_going_in = True
+            if abs(car_to_location[0]) + abs(car_to_location[1]) < abs(car_to_closest_location[0]) + \
+                                                                        abs(car_to_closest_location[1]):
+               closest_location = Vec3(pos)
+               car_to_closest_location = car_to_location
 
 
         if goal_ball_distance > other_goal_to_ball_distance or car_ball_distance < other_car_ball_distance * 1.5:
@@ -134,19 +141,17 @@ class BigBoyBot(BaseAgent):
                           abs(goal_to_car[1] + 0.1), goal_to_ball[2] / abs(goal_to_car[2] + 0.1)) * \
             (50 + (car_speed / 10000) * 50)
 
-
-        time_to_hit = (abs((ball_prediction[0] - car_location[0]) / (1 + car_velocity[0])) + \
-                      abs((ball_prediction[1] - car_location[1]) / (1 + car_velocity[1]))) / 50
-
-        other_time_to_hit = (abs((ball_prediction[0] - other_car_location[0]) / (1 + other_car_velocity[0])) + \
-                      abs((ball_prediction[1] - other_car_location[1]) / (1 + other_car_velocity[1]))) / 50
-
         car_to_hit_location = ball_prediction + offset - car_location
 
         car_to_shadow_location = ((ball_prediction + offset) + my_goal.location) / 2 - car_location
 
         steer_correction_radians_to_ball_prediction = find_correction(car_direction, car_to_hit_location)
         distance_to_hit = abs(car_to_hit_location[0]) + abs(car_to_hit_location[0])
+
+        time_to_hit = find_eta(car_location, ball_prediction, car_velocity, steer_correction_radians_to_ball)
+
+        other_time_to_hit = find_eta(other_car_location, ball_prediction, other_car_velocity,
+            steer_correction_radians_to_ball)
 
         steer_correction_radians_to_shadow = find_correction(car_direction, car_to_shadow_location)
         distance_to_shadow = abs(car_to_shadow_location[0]) + abs(car_to_shadow_location[0])
@@ -167,9 +172,10 @@ class BigBoyBot(BaseAgent):
         height_of_large_jump = 80
         height_to_flip = 100
 
-        if goal_car_distance < goal_ball_distance < other_car_ball_distance * 2 and is_going_in:
+        if time_to_hit > prediction_time < other_car_ball_distance * 2 and is_going_in:
             self.mode = "defending"
-        elif time_to_hit > other_time_to_hit + 0.2 or goal_ball_distance < car_ball_distance:
+        elif time_to_hit > other_time_to_hit + 0.3 and other_car_ball_distance < close_distance \
+                or goal_ball_distance < goal_car_distance:
             self.mode = "shadowing"
         elif abs(steer_correction_radians_to_boost) < math.pi / (2 * (1 + (my_car.boost / 5))) and \
                 distance_to_boost < other_car_ball_distance and distance_to_boost < car_ball_distance:
@@ -179,7 +185,7 @@ class BigBoyBot(BaseAgent):
 
         if self.mode == "attacking":
             if car_speed < total_ball_speed * 0.8 or time_to_hit + 0.2 > other_time_to_hit and not \
-                    my_car.is_super_sonic and car_ball_distance > (close_distance + car_speed - total_ball_speed):
+                    my_car.is_super_sonic and distance_to_shadow > 100:
                 if my_car.boost > 0:
                     self.status = "boosting"
                 elif 1000 < car_speed < car_ball_distance and abs(steer_correction_radians_to_ball) < math.pi / 8:
@@ -189,7 +195,7 @@ class BigBoyBot(BaseAgent):
                         abs(steer_correction_radians_to_ball) < math.pi / 2:
                     self.status = "jumping"
                 if ball_height_to_aerial > ball_prediction[2] > ball_height_to_flip and \
-                    abs(steer_correction_radians_to_ball) < math.pi / 8 or abs(time_to_hit - other_time_to_hit) < 0.1 \
+                    abs(steer_correction_radians_to_ball) < math.pi / 8 or abs(time_to_hit - other_time_to_hit) < 0.05 \
                         and abs(steer_correction_radians_to_ball) < math.pi / 8:
                     self.status = "flipping for ball"
             else:
@@ -224,7 +230,7 @@ class BigBoyBot(BaseAgent):
 
         # flipping to hit the ball
         if self.status == "flipping for ball":
-            if my_car.has_wheel_contact and not my_car.jumped or car_location[2] + 50 < ball_prediction[2]:
+            if my_car.has_wheel_contact and not my_car.jumped or car_location[2] + 20 < ball_prediction[2]:
                 self.jumping = True
             else:
                 if not self.controller_state.jump and not my_car.double_jumped and not my_car.has_wheel_contact:
@@ -260,7 +266,7 @@ class BigBoyBot(BaseAgent):
         else:
             if abs(my_car.physics.rotation.pitch) > 0.1 and not my_car.has_wheel_contact and \
                     not self.jumping:
-                self.controller_state.pitch = -my_car.physics.rotation.pitch
+                self.controller_state.pitch = -my_car.physics.rotation.pitch / 5;
                 if self.controller_state.pitch > 1:
                     self.controller_state.pitch = 1
                 if self.controller_state.pitch < -1:
@@ -277,8 +283,8 @@ class BigBoyBot(BaseAgent):
                 self.boosting = True
 
         if abs(my_car.physics.rotation.roll) > 0.2 and not my_car.has_wheel_contact and \
-                self.status != "flipping for speed":
-            self.controller_state.roll = -my_car.physics.rotation.roll / 5
+                not self.status == "flipping for speed":
+            self.controller_state.roll = my_car.physics.rotation.roll / 5
             if self.controller_state.roll > 1:
                 self.controller_state.roll = 1
             if self.controller_state.roll < -1:
@@ -294,13 +300,13 @@ class BigBoyBot(BaseAgent):
         if speed < 0:
             speed = 0
         turn = -steer_correction_radians_to_focus * 3
-        if 2 > abs(steer_correction_radians_to_focus) > 1:
+        if 2.5 > abs(steer_correction_radians_to_focus) > 1.5:
             self.drifting = True
             self.boosting = False
             self.jumping = False
             self.flipping = False
             turn = -steer_correction_radians_to_focus * 3
-        elif abs(steer_correction_radians_to_focus) > 2:
+        elif abs(steer_correction_radians_to_focus) > 2.5:
             speed = speed * -1
             self.boosting = False
             self.jumping = False
@@ -348,6 +354,30 @@ class BigBoyBot(BaseAgent):
         draw_debug(self.renderer, my_car.physics.location, closest_location, ball_prediction, action_display)
 
         return self.controller_state
+
+
+def find_eta(location1: Vec3, location2: Vec3, speed: Vec3, radians: float) -> float:
+    pos_to_pos = location1 - location2
+    top_speed = 500 + (abs(radians) * 100)
+    if (pos_to_pos[0] + 1) / abs(pos_to_pos[0] + 1) == (speed[0] + 1) / abs(speed[0] + 1):
+        xtime = abs(pos_to_pos[0] / (top_speed + abs(speed[0] / 2)))
+    else:
+        xtime = abs(pos_to_pos[0] / (top_speed - abs(speed[0] / 2)))
+    if (pos_to_pos[1] + 1) / abs(pos_to_pos[1] + 1) == (speed[1] + 1) / (abs(speed[1] + 1)):
+        ytime = abs(pos_to_pos[1] / (top_speed + abs(speed[1] / 2)))
+    else:
+        ytime = abs(pos_to_pos[1] / (top_speed - abs(speed[1] / 2)))
+    return xtime + ytime
+
+
+def get_score(ball_prediction_time: float, bot_eta: float, other_bot_eta: float, ball_prediction: Vec3) -> float:
+    bot_arrival_score = 10 - bot_eta
+    other_bot_arrival_score = other_bot_eta
+    soon_score = 10 - ball_prediction_time * 3
+    height_score = 10 - ball_prediction[2] / 250
+
+    return bot_arrival_score + other_bot_arrival_score + soon_score + height_score
+
 
 def find_correction(current: Vec3, ideal: Vec3) -> float:
     # Finds the angle from current to ideal vector in the xy-plane. Angle will be between -pi and +pi.
